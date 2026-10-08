@@ -8,119 +8,9 @@
 #include <chrono>
 #include <thread>
 
-#define WIDTH 640
-#define HEIGHT 480
-#define BPP 3
-
-#define FRAME_SIZE (WIDTH * HEIGHT * BPP)
-#define LINE_SIZE  (WIDTH * BPP)
-
-#define SERVER_PORT       5000
-#define CLIENT_VIDEO_PORT 5001
-
-#define VIDEO_HEADER_SIZE 32
-#define CHUNK_SIZE        1200
-
-#define MAGIC   0x12
-#define VERSION 1
-
-#define VIDEO_TYPE 1
+#include "NetworkUtils.hpp"
 
 #define FPS 30
-
-#define FLAG_FRAME_START 0x0001
-#define FLAG_FRAME_END   0x0002
-
-
-enum Command : unsigned char
-{
-    CMD_START,
-    CMD_STOP,
-    CMD_CONFIG,
-    CMD_STATUS
-};
-
-
-// ============================================================
-// Запись чисел в network byte order
-// ============================================================
-
-void write_u16(
-    char *buffer,
-    int offset,
-    uint16_t value
-)
-{
-    uint16_t network_value =
-        htons(value);
-
-    memcpy(
-        buffer + offset,
-        &network_value,
-        sizeof(network_value)
-    );
-}
-
-
-void write_u32(
-    char *buffer,
-    int offset,
-    uint32_t value
-)
-{
-    uint32_t network_value =
-        htonl(value);
-
-    memcpy(
-        buffer + offset,
-        &network_value,
-        sizeof(network_value)
-    );
-}
-
-
-void write_u64(
-    char *buffer,
-    int offset,
-    uint64_t value
-)
-{
-    /*
-        Записываем uint64 как:
-
-        high 32 bits
-        low  32 bits
-
-        оба в network byte order.
-    */
-
-    uint32_t high =
-        static_cast<uint32_t>(
-            value >> 32
-        );
-
-    uint32_t low =
-        static_cast<uint32_t>(
-            value & 0xFFFFFFFF
-        );
-
-    write_u32(
-        buffer,
-        offset,
-        high
-    );
-
-    write_u32(
-        buffer,
-        offset + 4,
-        low
-    );
-}
-
-
-// ============================================================
-// Рисование тестового квадрата
-// ============================================================
 
 void draw_rect(
     unsigned char *frame,
@@ -197,194 +87,6 @@ void update_rect(
     );
 }
 
-
-// ============================================================
-// Ответ на CONFIG / STATUS
-//
-// Формат:
-//
-// byte 0     command
-// byte 1...  UTF-8 / ASCII text
-// ============================================================
-
-void send_command_response(
-    SOCKET command_socket,
-    const sockaddr_in &client,
-    unsigned char command,
-    const char *text
-)
-{
-    char buffer[512];
-
-    buffer[0] = command;
-
-    int text_size =
-        static_cast<int>(
-            strlen(text)
-        );
-
-    if (text_size > 510)
-        text_size = 510;
-
-    memcpy(
-        buffer + 1,
-        text,
-        text_size
-    );
-
-    sendto(
-        command_socket,
-        buffer,
-        1 + text_size,
-        0,
-        (const sockaddr *)&client,
-        sizeof(client)
-    );
-}
-
-
-// ============================================================
-// Отправка одного VIDEO packet
-// ============================================================
-
-void send_video_packet(
-    SOCKET video_socket,
-
-    const sockaddr_in &client,
-
-    const unsigned char *payload,
-
-    uint16_t payload_size,
-
-    uint32_t stream_id,
-    uint32_t frame_id,
-    uint32_t packet_seq,
-
-    uint64_t timestamp_us,
-
-    uint16_t line_number,
-    uint16_t line_offset,
-
-    uint16_t flags
-)
-{
-    char packet[
-        VIDEO_HEADER_SIZE +
-        CHUNK_SIZE
-    ];
-
-    /*
-        HEADER:
-
-        offset  size
-
-        0       2  magic
-        2       1  version
-        3       1  type
-
-        4       4  stream_id
-        8       4  frame_id
-        12      4  packet_seq
-
-        16      8  timestamp_us
-
-        24      2  line_number
-        26      2  line_offset
-
-        28      2  payload_size
-        30      2  flags
-    */
-
-    write_u16(
-        packet,
-        0,
-        MAGIC
-    );
-
-    packet[2] =
-        VERSION;
-
-    packet[3] =
-        VIDEO_TYPE;
-
-    write_u32(
-        packet,
-        4,
-        stream_id
-    );
-
-    write_u32(
-        packet,
-        8,
-        frame_id
-    );
-
-    write_u32(
-        packet,
-        12,
-        packet_seq
-    );
-
-    write_u64(
-        packet,
-        16,
-        timestamp_us
-    );
-
-    write_u16(
-        packet,
-        24,
-        line_number
-    );
-
-    write_u16(
-        packet,
-        26,
-        line_offset
-    );
-
-    write_u16(
-        packet,
-        28,
-        payload_size
-    );
-
-    write_u16(
-        packet,
-        30,
-        flags
-    );
-
-    memcpy(
-        packet + VIDEO_HEADER_SIZE,
-        payload,
-        payload_size
-    );
-
-    int result = sendto(
-        video_socket,
-        packet,
-        VIDEO_HEADER_SIZE +
-            payload_size,
-        0,
-        (const sockaddr *)&client,
-        sizeof(client)
-    );
-
-    if (result == SOCKET_ERROR)
-    {
-        printf(
-            "video sendto error: %d\n",
-            WSAGetLastError()
-        );
-    }
-}
-
-
-// ============================================================
-// main
-// ============================================================
-
 int main()
 {
     WSADATA wsadata;
@@ -433,7 +135,7 @@ int main()
         AF_INET;
 
     server_addr.sin_port =
-        htons(SERVER_PORT);
+        htons(5002);
 
     server_addr.sin_addr.s_addr =
         INADDR_ANY;
@@ -461,9 +163,6 @@ int main()
 
     /*
         COMMAND socket делаем non-blocking.
-
-        Иначе recvfrom() остановит генерацию
-        видео пока команда не придёт.
     */
 
     u_long non_blocking = 1;
@@ -705,7 +404,7 @@ int main()
                     "BPP: %d\n"
                     "FPS: %d\n"
                     "Payload: %d bytes\n"
-                    "Video port: %d",
+                    "Video port: %d\n",
 
                     WIDTH,
                     HEIGHT,
@@ -723,7 +422,7 @@ int main()
                 );
 
                 printf(
-                    "CONFIG response sent\n"
+                    "CONFIG response sent \n"
                 );
             }
 
@@ -746,7 +445,7 @@ int main()
                     "Streaming: %s\n"
                     "Stream ID: %u\n"
                     "Frame ID: %u\n"
-                    "Packet sequence: %u",
+                    "Packet sequence: %u\n",
 
                     streaming
                         ? "ON"

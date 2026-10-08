@@ -82,7 +82,7 @@ int main(int argc, char **argv)
 
     command_socket.bind(
         QHostAddress::AnyIPv4,
-        5002
+        5000
     );
 
     QHostAddress serverAddress(
@@ -127,7 +127,7 @@ int main(int argc, char **argv)
             command_socket.writeDatagram(   // команда отправляется на сервер на порт 5000
                 command, 
                 serverAddress,
-                SERVER_PORT
+                5002
             );
 
             printf("START sent\n\r");
@@ -146,7 +146,7 @@ int main(int argc, char **argv)
             command_socket.writeDatagram(
                 command,
                 serverAddress,
-                SERVER_PORT
+                5002
             );
 
             printf("STOP sent\n\t");
@@ -154,7 +154,7 @@ int main(int argc, char **argv)
     );
 
     QObject::connect(
-        &stop_button,
+        &status_button,
         &QPushButton::clicked,
         [&](){
 
@@ -165,7 +165,7 @@ int main(int argc, char **argv)
             command_socket.writeDatagram(
                 command,
                 serverAddress,
-                SERVER_PORT
+                5002
             );
 
             printf("STOP sent\n\t");
@@ -173,7 +173,7 @@ int main(int argc, char **argv)
     );
 
     QObject::connect(
-        &stop_button,
+        &config_button,
         &QPushButton::clicked,
         [&](){
 
@@ -184,7 +184,7 @@ int main(int argc, char **argv)
             command_socket.writeDatagram(
                 command,
                 serverAddress,
-                SERVER_PORT
+                5002
             );
 
             printf("STOP sent\n\t");

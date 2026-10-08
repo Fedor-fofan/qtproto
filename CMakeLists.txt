@@ -4,6 +4,6 @@ project(MyProject)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network)
 
-add_executable(app main.cpp)
+add_executable(app src/main.cpp)
 
 target_link_libraries(app PRIVATE Qt6::Core Qt6::Widgets Qt6::Network)
