@@ -1,0 +1,65 @@
+#define WIDTH 640
+#define HEIGHT 480
+#define BPP 3
+
+#define FRAME_SIZE (WIDTH * HEIGHT * BPP)
+#define LINE_SIZE  (WIDTH * BPP)
+
+#define VIDEO_HEADER_SIZE 32
+#define CHUNK_SIZE        1200
+
+#define MAGIC   0x12
+
+#define VERSION 1
+
+#define VIDEO_TYPE 1
+
+extern struct netif server_netif;
+static struct udp_pcb *video_pcb, *command_pcb;
+
+#define UDP_SEND_BUFSIZE 1200
+#define COMMAND_BUFFER_SIZE 512
+static char send_buf[UDP_SEND_BUFSIZE];
+
+typedef enum {
+	CMD_START,
+	CMD_STOP,
+	CMD_CONFIG,
+	CMD_STATUS
+} Command;
+
+// для запоминания клиента
+typedef struct {
+    ip_addr_t client_addr;
+    u16_t client_port;
+    int known;
+} client_info_t;
+
+static client_info_t client;
+
+void command_cb(void *arg, struct udp_pcb *pcb, struct pbuf *p, const ip_addr_t *addr, u16_t port){
+	client_info_t *info = (client_info_t *)arg;
+
+	ip_addr_copy(info->client_addr, *addr);
+	info->client_port = port;
+	info->known = 1;
+
+	if (p->tot_len > 0 &&
+	    p->tot_len <= sizeof(command_buffer))
+	{
+	    u16_t copied = pbuf_copy_partial(p, command_buffer, p->tot_len, 0);
+
+	char command = command_buffer[0];
+
+	switch(command){
+	case START:
+
+	}
+}
+
+void start_application(udp_pcb *video_pcb, udp_pcb *command_pcb, char unsigned *frame){
+
+	err_t res = udp_recv(command_pcb, command_cb, &client_addr);
+
+
+}

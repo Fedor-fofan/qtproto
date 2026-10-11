@@ -80,6 +80,11 @@ int main(int argc, char **argv)
         CLIENT_PORT
     );
 
+    video_socket.setSocketOption(
+    QAbstractSocket::ReceiveBufferSizeSocketOption,
+    8 * 1024 * 1024
+    );
+
     command_socket.bind(
         QHostAddress::AnyIPv4,
         5002

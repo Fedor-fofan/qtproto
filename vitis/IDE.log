@@ -1,0 +1,30 @@
+21:16:41 INFO  : Launching XSCT server: xsct.bat -n  -interactive C:\workspace\ethernet\qtproto3\vitis\temp_xsdb_launch_script.tcl
+21:16:41 INFO  : Registering command handlers for Vitis TCF services
+21:16:46 INFO  : Platform repository initialization has completed.
+21:16:46 INFO  : XSCT server has started successfully.
+21:16:53 INFO  : plnx-install-location is set to ''
+21:16:53 INFO  : Successfully done setting XSCT server connection channel  
+21:16:53 INFO  : Successfully done query RDI_DATADIR 
+21:16:53 INFO  : Successfully done setting workspace for the tool. 
+21:20:46 INFO  : Result from executing command 'getProjects': zynq
+21:20:46 INFO  : Result from executing command 'getPlatforms': 
+21:20:46 WARN  : An unexpected exception occurred in the module 'platform project logging'
+21:20:46 INFO  : Platform 'zynq' is added to custom repositories.
+21:20:58 INFO  : Platform 'zynq' is added to custom repositories.
+21:24:43 INFO  : No changes in MSS file content so sources will not be generated.
+22:00:20 INFO  : Launching XSCT server: xsct.bat -n  -interactive C:\workspace\ethernet\qtproto3\vitis\temp_xsdb_launch_script.tcl
+22:00:28 INFO  : XSCT server has started successfully.
+22:00:28 INFO  : Successfully done setting XSCT server connection channel  
+22:00:28 INFO  : plnx-install-location is set to ''
+22:00:28 INFO  : Successfully done setting workspace for the tool. 
+22:00:36 INFO  : Platform repository initialization has completed.
+22:00:39 INFO  : Registering command handlers for Vitis TCF services
+22:00:45 INFO  : Successfully done query RDI_DATADIR 
+00:14:47 INFO  : Launching XSCT server: xsct.bat -n  -interactive C:\workspace\ethernet\qtproto3\vitis\temp_xsdb_launch_script.tcl
+00:14:52 INFO  : XSCT server has started successfully.
+00:14:52 INFO  : plnx-install-location is set to ''
+00:14:52 INFO  : Successfully done setting XSCT server connection channel  
+00:14:52 INFO  : Successfully done setting workspace for the tool. 
+00:14:58 INFO  : Platform repository initialization has completed.
+00:15:00 INFO  : Registering command handlers for Vitis TCF services
+00:15:05 INFO  : Successfully done query RDI_DATADIR 

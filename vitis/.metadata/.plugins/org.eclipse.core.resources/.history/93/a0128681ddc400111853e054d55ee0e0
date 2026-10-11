@@ -1,0 +1,693 @@
+#include <stdint.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "lwip/err.h"
+#include "lwip/ip_addr.h"
+#include "lwip/pbuf.h"
+#include "lwip/sys.h"
+#include "lwip/udp.h"
+
+
+/* =========================================================
+   Image and protocol configuration
+   ========================================================= */
+
+#define WIDTH   640
+#define HEIGHT  480
+#define BPP     3
+
+#define FRAME_SIZE  (WIDTH * HEIGHT * BPP)
+#define LINE_SIZE   (WIDTH * BPP)
+
+#define SERVER_COMMAND_PORT  5000
+#define CLIENT_VIDEO_PORT    5001
+
+#define VIDEO_HEADER_SIZE  32
+#define CHUNK_SIZE         1200
+
+#define COMMAND_BUFFER_SIZE 512
+
+#define MAGIC        0x12
+#define VERSION      1
+#define VIDEO_TYPE   1
+
+#define FPS 30
+#define FRAME_PERIOD_MS (1000U / FPS)
+
+#define FLAG_FRAME_START  0x0001
+#define FLAG_FRAME_END    0x0002
+
+#define PACKETS_PER_LINE ((LINE_SIZE + CHUNK_SIZE - 1) / CHUNK_SIZE)
+
+#define PACKETS_PER_FRAME (HEIGHT * PACKETS_PER_LINE)
+
+typedef enum
+{
+    CMD_START,
+    CMD_STOP,
+    CMD_CONFIG,
+    CMD_STATUS
+} Command;
+
+typedef struct
+{
+    struct udp_pcb *command_pcb;
+    struct udp_pcb *video_pcb;
+
+    ip_addr_t client_addr;
+
+    u16_t client_command_port;
+    u16_t client_video_port;
+
+    u8_t client_known;
+    u8_t streaming;
+    u8_t frame_active;
+
+    const unsigned char *source_frame;
+
+    u32_t stream_id;
+    u32_t frame_id;
+    u32_t packet_seq;
+
+    u32_t stream_start_ms;
+    u32_t next_frame_time_ms;
+    u32_t current_frame_start_ms;
+
+    u32_t tx_frame_id;
+    u32_t packet_index;
+
+    uint64_t timestamp_us;
+
+} video_server_state_t;
+
+
+static video_server_state_t server;
+static unsigned char tx_frame[FRAME_SIZE];
+
+static void write_u16(
+    unsigned char *buf,
+    int offset,
+    uint16_t value
+)
+{
+    buf[offset] =
+        (unsigned char)(value >> 8);
+
+    buf[offset + 1] =
+        (unsigned char)value;
+}
+
+static void write_u32(
+    unsigned char *buf,
+    int offset,
+    uint32_t value
+)
+{
+    buf[offset] =
+        (unsigned char)(value >> 24);
+
+    buf[offset + 1] =
+        (unsigned char)(value >> 16);
+
+    buf[offset + 2] =
+        (unsigned char)(value >> 8);
+
+    buf[offset + 3] =
+        (unsigned char)value;
+}
+
+
+static void write_u64(
+    unsigned char *buf,
+    int offset,
+    uint64_t value
+)
+{
+    int i;
+
+    for (i = 0; i < 8; ++i)
+    {
+        buf[offset + i] =
+            (unsigned char)(
+                value >> (56 - i * 8)
+            );
+    }
+}
+
+
+/* Работает корректно и при переполнении sys_now(). */
+static int time_reached(
+    u32_t now,
+    u32_t deadline
+)
+{
+    return (int32_t)(now - deadline) >= 0;
+}
+
+
+/* =========================================================
+   Send CONFIG / STATUS response
+
+   Datagram format:
+       byte 0     command
+       byte 1...  UTF-8 text
+
+   Совместимо с QString::fromUtf8() в Qt.
+   ========================================================= */
+
+static void send_command_response(
+    video_server_state_t *ctx,
+    const ip_addr_t *addr,
+    u16_t port,
+    u8_t command,
+    const char *message
+)
+{
+    unsigned char buffer[COMMAND_BUFFER_SIZE];
+
+    size_t message_len = strlen(message);
+
+    if (message_len > sizeof(buffer) - 1)
+    {
+        message_len = sizeof(buffer) - 1;
+    }
+
+    buffer[0] = command;
+
+    memcpy(
+        buffer + 1,
+        message,
+        message_len
+    );
+
+    u16_t packet_len =
+        (u16_t)(message_len + 1);
+
+    struct pbuf *p = pbuf_alloc(
+        PBUF_TRANSPORT,
+        packet_len,
+        PBUF_RAM
+    );
+
+    if (p == NULL)
+    {
+        printf("Cannot allocate response pbuf\n");
+        return;
+    }
+
+    err_t err = pbuf_take(
+        p,
+        buffer,
+        packet_len
+    );
+
+    if (err == ERR_OK)
+    {
+        err = udp_sendto(
+            ctx->command_pcb,
+            p,
+            addr,
+            port
+        );
+    }
+
+    if (err != ERR_OK)
+    {
+        printf("Command response error: %d\n", err);
+    }
+
+    pbuf_free(p);
+}
+
+
+/* =========================================================
+   UDP command callback
+   ========================================================= */
+
+static void command_cb(
+    void *arg,
+    struct udp_pcb *pcb,
+    struct pbuf *p,
+    const ip_addr_t *addr,
+    u16_t port
+)
+{
+    (void)pcb;
+
+    video_server_state_t *ctx =
+        (video_server_state_t *)arg;
+
+    if (p == NULL)
+        return;
+
+    if (ctx == NULL ||
+        p->tot_len < 1 ||
+        p->tot_len > COMMAND_BUFFER_SIZE)
+    {
+        pbuf_free(p);
+        return;
+    }
+
+    unsigned char command_buffer[COMMAND_BUFFER_SIZE];
+
+    u16_t packet_len = p->tot_len;
+
+    u16_t copied = pbuf_copy_partial(
+        p,
+        command_buffer,
+        packet_len,
+        0
+    );
+
+    pbuf_free(p);
+
+    if (copied != packet_len)
+        return;
+
+    u8_t command = command_buffer[0];
+
+    char response[COMMAND_BUFFER_SIZE];
+
+    switch (command)
+    {
+        case CMD_START:
+        {
+            /*
+             * Запоминаем IP устройства, отправившего START.
+             * Видео будем отправлять на этот IP и порт 5001.
+             */
+
+            ip_addr_copy(
+                ctx->client_addr,
+                *addr
+            );
+
+            ctx->client_command_port = port;
+            ctx->client_video_port = CLIENT_VIDEO_PORT;
+
+            ctx->client_known = 1;
+            ctx->streaming = 1;
+            ctx->frame_active = 0;
+
+            ctx->stream_id++;
+
+            ctx->frame_id = 0;
+            ctx->packet_seq = 0;
+            ctx->packet_index = 0;
+
+            ctx->stream_start_ms = sys_now();
+            ctx->next_frame_time_ms = ctx->stream_start_ms;
+
+            printf("START received\n");
+
+            break;
+        }
+
+        case CMD_STOP:
+        {
+            ctx->streaming = 0;
+            ctx->frame_active = 0;
+
+            printf("STOP received\n");
+
+            break;
+        }
+
+        case CMD_CONFIG:
+        {
+            snprintf(
+                response,
+                sizeof(response),
+                "Resolution: %dx%d\n"
+                "Format: RGB888\n"
+                "BPP: %d\n"
+                "FPS: %d\n"
+                "Chunk size: %d\n"
+                "Video port: %d",
+
+                WIDTH,
+                HEIGHT,
+                BPP,
+                FPS,
+                CHUNK_SIZE,
+                CLIENT_VIDEO_PORT
+            );
+
+            send_command_response(
+                ctx,
+                addr,
+                port,
+                CMD_CONFIG,
+                response
+            );
+
+            break;
+        }
+
+        case CMD_STATUS:
+        {
+            snprintf(
+                response,
+                sizeof(response),
+                "Streaming: %s\n"
+                "Stream ID: %lu\n"
+                "Frame ID: %lu\n"
+                "Packet sequence: %lu",
+
+                ctx->streaming ? "ON" : "OFF",
+                (unsigned long)ctx->stream_id,
+                (unsigned long)ctx->frame_id,
+                (unsigned long)ctx->packet_seq
+            );
+
+            send_command_response(
+                ctx,
+                addr,
+                port,
+                CMD_STATUS,
+                response
+            );
+
+            break;
+        }
+
+        default:
+        {
+            printf(
+                "Unknown command: %u\n",
+                (unsigned)command
+            );
+
+            break;
+        }
+    }
+}
+
+
+/* =========================================================
+   Send one VIDEO packet
+   ========================================================= */
+
+static err_t send_video_packet(
+    video_server_state_t *ctx,
+    const unsigned char *payload,
+    u16_t payload_size,
+    u32_t current_frame_id,
+    u32_t current_packet_seq,
+    u64_t timestamp_us,
+    u16_t line_number,
+    u16_t line_offset,
+    u16_t flags
+)
+{
+    unsigned char packet[
+        VIDEO_HEADER_SIZE + CHUNK_SIZE
+    ];
+
+    /*
+       Header is exactly 32 bytes.
+
+       Offset   Size   Field
+       0        2      magic
+       2        1      version
+       3        1      type
+       4        4      stream_id
+       8        4      frame_id
+       12       4      packet_seq
+       16       8      timestamp_us
+       24       2      line_number
+       26       2      line_offset
+       28       2      payload_size
+       30       2      flags
+    */
+
+    write_u16(packet, 0, MAGIC);
+
+    packet[2] = VERSION;
+    packet[3] = VIDEO_TYPE;
+
+    write_u32(packet, 4, ctx->stream_id);
+    write_u32(packet, 8, current_frame_id);
+    write_u32(packet, 12, current_packet_seq);
+
+    write_u64(packet, 16, timestamp_us);
+
+    write_u16(packet, 24, line_number);
+    write_u16(packet, 26, line_offset);
+    write_u16(packet, 28, payload_size);
+    write_u16(packet, 30, flags);
+
+    memcpy(
+        packet + VIDEO_HEADER_SIZE,
+        payload,
+        payload_size
+    );
+
+    u16_t datagram_len =
+        (u16_t)(VIDEO_HEADER_SIZE + payload_size);
+
+    struct pbuf *p = pbuf_alloc(
+        PBUF_TRANSPORT,
+        datagram_len,
+        PBUF_RAM
+    );
+
+    if (p == NULL)
+        return ERR_MEM;
+
+    err_t err = pbuf_take(
+        p,
+        packet,
+        datagram_len
+    );
+
+    if (err == ERR_OK)
+    {
+        err = udp_sendto(
+            ctx->video_pcb,
+            p,
+            &ctx->client_addr,
+            ctx->client_video_port
+        );
+    }
+
+    pbuf_free(p);
+
+    return err;
+}
+
+
+/* =========================================================
+   Initialise server sockets and callback
+   ========================================================= */
+
+int video_server_init(
+    unsigned char *processed_frame
+)
+{
+    if (processed_frame == NULL)
+        return -1;
+
+    memset(
+        &server,
+        0,
+        sizeof(server)
+    );
+
+    server.source_frame = processed_frame;
+    server.client_video_port = CLIENT_VIDEO_PORT;
+
+    /* Command socket. */
+    server.command_pcb = udp_new();
+
+    if (server.command_pcb == NULL)
+    {
+        printf("Cannot create command PCB\n");
+        return -1;
+    }
+
+    /* Video transmit socket. */
+    server.video_pcb = udp_new();
+
+    if (server.video_pcb == NULL)
+    {
+        printf("Cannot create video PCB\n");
+
+        udp_remove(server.command_pcb);
+        server.command_pcb = NULL;
+
+        return -1;
+    }
+
+    /*
+     * Здесь указывается локальный порт самого Zynq.
+     * UDP-порт задаётся в host byte order.
+     */
+    err_t err = udp_bind(
+        server.command_pcb,
+        IP_ADDR_ANY,
+        SERVER_COMMAND_PORT
+    );
+
+    if (err != ERR_OK)
+    {
+        printf("Command bind error: %d\n", err);
+
+        udp_remove(server.command_pcb);
+        udp_remove(server.video_pcb);
+
+        server.command_pcb = NULL;
+        server.video_pcb = NULL;
+
+        return -1;
+    }
+
+    udp_recv(
+        server.command_pcb,
+        command_cb,
+        &server
+    );
+
+    printf("Video server ready on UDP port %d\n",
+           SERVER_COMMAND_PORT);
+
+    return 0;
+}
+
+
+/* =========================================================
+   Send one video datagram per call.
+
+   Вызывается из основного цикла Vitis после обработки
+   входящих Ethernet-пакетов.
+   ========================================================= */
+
+void video_server_poll(void)
+{
+    video_server_state_t *ctx = &server;
+
+    if (!ctx->streaming || !ctx->client_known)
+        return;
+
+    u32_t now = sys_now();
+
+    /*
+     * Начинаем новый кадр, только когда наступил срок
+     * отправки и предыдущий кадр уже закончен.
+     */
+    if (!ctx->frame_active)
+    {
+        if (!time_reached(now, ctx->next_frame_time_ms))
+            return;
+
+        /*
+         * Сохраняем снимок кадра на время его передачи.
+         * Исходный буфер не должен изменяться в процессе
+         * этого memcpy().
+         */
+        memcpy(
+            tx_frame,
+            ctx->source_frame,
+            FRAME_SIZE
+        );
+
+        ctx->tx_frame_id = ctx->frame_id;
+        ctx->current_frame_start_ms = now;
+        ctx->packet_index = 0;
+
+        ctx->timestamp_us =
+            (uint64_t)(u32_t)(
+                now - ctx->stream_start_ms
+            ) * 1000ULL;
+
+        ctx->frame_active = 1;
+    }
+
+    /*
+     * Для RGB888:
+     * LINE_SIZE = 640 * 3 = 1920 байт.
+     *
+     * CHUNK_SIZE = 1200:
+     *   первый пакет строки: 1200 байт
+     *   второй пакет строки: 720 байт
+     */
+    u32_t packet_in_line =
+        ctx->packet_index % PACKETS_PER_LINE;
+
+    u16_t line_number =
+        (u16_t)(
+            ctx->packet_index / PACKETS_PER_LINE
+        );
+
+    u16_t line_offset =
+        (u16_t)(packet_in_line * CHUNK_SIZE);
+
+    u16_t remaining =
+        (u16_t)(LINE_SIZE - line_offset);
+
+    u16_t payload_size =
+        remaining > CHUNK_SIZE
+            ? CHUNK_SIZE
+            : remaining;
+
+    const unsigned char *payload =
+        tx_frame
+        + (size_t)line_number * LINE_SIZE
+        + line_offset;
+
+    u16_t flags = 0;
+
+    if (ctx->packet_index == 0)
+        flags |= FLAG_FRAME_START;
+
+    if (ctx->packet_index + 1 == PACKETS_PER_FRAME)
+        flags |= FLAG_FRAME_END;
+
+    err_t err = send_video_packet(
+        ctx,
+        payload,
+        payload_size,
+        ctx->tx_frame_id,
+        ctx->packet_seq,
+        ctx->timestamp_us,
+        line_number,
+        line_offset,
+        flags
+    );
+
+    /*
+     * В этой базовой версии не делаем повторную отправку.
+     * Даже если sendto завершился ошибкой, переходим дальше,
+     * чтобы поток не остановился на одном пакете.
+     */
+    if (err != ERR_OK)
+    {
+        /* Чтобы не засорять UART сообщениями на каждом пакете. */
+        static u32_t error_counter = 0;
+
+        if ((error_counter++ & 0xFFU) == 0)
+        {
+            printf("Video send error: %d\n", err);
+        }
+    }
+
+    ctx->packet_seq++;
+    ctx->packet_index++;
+
+    /* Передача текущего кадра завершена. */
+    if (ctx->packet_index >= PACKETS_PER_FRAME)
+    {
+        ctx->frame_active = 0;
+        ctx->frame_id++;
+
+        /*
+         * Не накапливаем очередь старых кадров.
+         * Если отправка затянулась дольше периода,
+         * следующий кадр начнётся при ближайшем poll().
+         */
+        ctx->next_frame_time_ms =
+            ctx->current_frame_start_ms + FRAME_PERIOD_MS;
+    }
+}

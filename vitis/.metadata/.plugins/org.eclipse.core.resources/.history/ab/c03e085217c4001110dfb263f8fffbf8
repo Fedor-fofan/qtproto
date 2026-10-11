@@ -1,0 +1,867 @@
+#include <winsock2.h>
+#include <ws2tcpip.h>
+
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <vector>
+#include <chrono>
+#include <thread>
+#include <algorithm>
+
+#ifdef _MSC_VER
+#pragma comment(lib, "Ws2_32.lib")
+#endif
+
+// ============================================================
+// Настройки изображения и протокола
+// ============================================================
+
+#define WIDTH 640
+#define HEIGHT 480
+#define BPP 3
+
+#define FRAME_SIZE (WIDTH * HEIGHT * BPP)
+#define LINE_SIZE  (WIDTH * BPP)
+
+#define SERVER_COMMAND_PORT 5000
+#define CLIENT_VIDEO_PORT  5001
+
+#define VIDEO_HEADER_SIZE 32
+#define CHUNK_SIZE 1200
+
+#define MAGIC 0x12
+#define VERSION 1
+#define VIDEO_TYPE 1
+
+#define FPS 30
+#define COMMAND_BUFFER_SIZE 512
+
+#define FLAG_FRAME_START 0x0001
+#define FLAG_FRAME_END   0x0002
+
+
+// Значения должны совпадать с enum в Qt-клиенте.
+enum Command : unsigned char
+{
+    CMD_START,
+    CMD_STOP,
+    CMD_CONFIG,
+    CMD_STATUS
+};
+
+
+// ============================================================
+// Состояние сервера
+// ============================================================
+
+static bool streaming = false;
+static bool client_known = false;
+
+static sockaddr_in video_client{};
+
+static uint32_t stream_id = 0;
+static uint32_t frame_id = 0;
+static uint32_t packet_seq = 0;
+
+static int rect_x = 0;
+static int rect_y = 0;
+
+static const int RECT_WIDTH = 50;
+static const int RECT_HEIGHT = 50;
+
+static int speed_x = 3;
+static int speed_y = 3;
+
+static const auto server_start_time =
+    std::chrono::steady_clock::now();
+
+
+// ============================================================
+// Запись чисел в Big Endian
+// ============================================================
+
+static void write_u16(
+    unsigned char *buffer,
+    int offset,
+    uint16_t value
+)
+{
+    buffer[offset] =
+        static_cast<unsigned char>(value >> 8);
+
+    buffer[offset + 1] =
+        static_cast<unsigned char>(value);
+}
+
+
+static void write_u32(
+    unsigned char *buffer,
+    int offset,
+    uint32_t value
+)
+{
+    buffer[offset] =
+        static_cast<unsigned char>(value >> 24);
+
+    buffer[offset + 1] =
+        static_cast<unsigned char>(value >> 16);
+
+    buffer[offset + 2] =
+        static_cast<unsigned char>(value >> 8);
+
+    buffer[offset + 3] =
+        static_cast<unsigned char>(value);
+}
+
+
+static void write_u64(
+    unsigned char *buffer,
+    int offset,
+    uint64_t value
+)
+{
+    for (int i = 0; i < 8; ++i)
+    {
+        buffer[offset + i] =
+            static_cast<unsigned char>(
+                value >> (56 - i * 8)
+            );
+    }
+}
+
+
+// ============================================================
+// Отправка STATUS и CONFIG
+//
+// Формат ответа:
+//   byte 0     command
+//   byte 1...  текст
+// ============================================================
+
+static void send_command_response(
+    SOCKET command_socket,
+    const sockaddr_in &client,
+    unsigned char command,
+    const char *message
+)
+{
+    unsigned char buffer[COMMAND_BUFFER_SIZE];
+
+    size_t message_size = strlen(message);
+
+    if (message_size > sizeof(buffer) - 1)
+    {
+        message_size = sizeof(buffer) - 1;
+    }
+
+    buffer[0] = command;
+
+    memcpy(
+        buffer + 1,
+        message,
+        message_size
+    );
+
+    int packet_size =
+        static_cast<int>(message_size + 1);
+
+    int result = sendto(
+        command_socket,
+        reinterpret_cast<const char *>(buffer),
+        packet_size,
+        0,
+        reinterpret_cast<const sockaddr *>(&client),
+        sizeof(client)
+    );
+
+    if (result == SOCKET_ERROR)
+    {
+        printf(
+            "Command response error: %d\n",
+            WSAGetLastError()
+        );
+    }
+}
+
+
+// ============================================================
+// Обработка команд
+// ============================================================
+
+static void process_commands(SOCKET command_socket)
+{
+    while (true)
+    {
+        char buffer[COMMAND_BUFFER_SIZE];
+
+        sockaddr_in sender{};
+
+        int sender_size = sizeof(sender);
+
+        int received = recvfrom(
+            command_socket,
+            buffer,
+            sizeof(buffer),
+            0,
+            reinterpret_cast<sockaddr *>(&sender),
+            &sender_size
+        );
+
+        if (received == SOCKET_ERROR)
+        {
+            int error = WSAGetLastError();
+
+            // Сокет неблокирующий, команды пока закончились.
+            if (error == WSAEWOULDBLOCK)
+            {
+                return;
+            }
+
+            printf(
+                "recvfrom error: %d\n",
+                error
+            );
+
+            return;
+        }
+
+        if (received < 1)
+        {
+            continue;
+        }
+
+        unsigned char command =
+            static_cast<unsigned char>(buffer[0]);
+
+        switch (command)
+        {
+            // ------------------------------------------------
+            // START
+            // ------------------------------------------------
+
+            case CMD_START:
+            {
+                // Запоминаем IP клиента.
+                video_client = sender;
+
+                // Видео отправляем на клиентский порт 5001.
+                video_client.sin_port =
+                    htons(CLIENT_VIDEO_PORT);
+
+                client_known = true;
+                streaming = true;
+
+                // Новый запуск потока.
+                ++stream_id;
+
+                frame_id = 0;
+                packet_seq = 0;
+
+                // Для теста начинаем квадрат с начальной позиции.
+                rect_x = 0;
+                rect_y = 0;
+
+                speed_x = 3;
+                speed_y = 3;
+
+                printf(
+                    "START received; stream_id=%u\n",
+                    static_cast<unsigned>(stream_id)
+                );
+
+                break;
+            }
+
+
+            // ------------------------------------------------
+            // STOP
+            // ------------------------------------------------
+
+            case CMD_STOP:
+            {
+                streaming = false;
+
+                printf("STOP received\n");
+
+                break;
+            }
+
+
+            // ------------------------------------------------
+            // CONFIG
+            // ------------------------------------------------
+
+            case CMD_CONFIG:
+            {
+                char response[COMMAND_BUFFER_SIZE];
+
+                snprintf(
+                    response,
+                    sizeof(response),
+                    "Resolution: %dx%d\n"
+                    "Format: RGB888\n"
+                    "BPP: %d\n"
+                    "FPS: %d\n"
+                    "Chunk size: %d\n"
+                    "Video port: %d",
+
+                    WIDTH,
+                    HEIGHT,
+                    BPP,
+                    FPS,
+                    CHUNK_SIZE,
+                    CLIENT_VIDEO_PORT
+                );
+
+                send_command_response(
+                    command_socket,
+                    sender,
+                    CMD_CONFIG,
+                    response
+                );
+
+                printf("CONFIG response sent\n");
+
+                break;
+            }
+
+
+            // ------------------------------------------------
+            // STATUS
+            // ------------------------------------------------
+
+            case CMD_STATUS:
+            {
+                char response[COMMAND_BUFFER_SIZE];
+
+                snprintf(
+                    response,
+                    sizeof(response),
+                    "Streaming: %s\n"
+                    "Stream ID: %u\n"
+                    "Frame ID: %u\n"
+                    "Packet sequence: %u",
+
+                    streaming ? "ON" : "OFF",
+                    static_cast<unsigned>(stream_id),
+                    static_cast<unsigned>(frame_id),
+                    static_cast<unsigned>(packet_seq)
+                );
+
+                send_command_response(
+                    command_socket,
+                    sender,
+                    CMD_STATUS,
+                    response
+                );
+
+                printf("STATUS response sent\n");
+
+                break;
+            }
+
+
+            default:
+            {
+                printf(
+                    "Unknown command: %u\n",
+                    static_cast<unsigned>(command)
+                );
+
+                break;
+            }
+        }
+    }
+}
+
+
+// ============================================================
+// Движущийся тестовый квадрат
+// ============================================================
+
+static void update_rect()
+{
+    rect_x += speed_x;
+    rect_y += speed_y;
+
+    if (rect_x + RECT_WIDTH >= WIDTH)
+    {
+        rect_x = WIDTH - RECT_WIDTH;
+        speed_x = -speed_x;
+    }
+
+    if (rect_x <= 0)
+    {
+        rect_x = 0;
+        speed_x = -speed_x;
+    }
+
+    if (rect_y + RECT_HEIGHT >= HEIGHT)
+    {
+        rect_y = HEIGHT - RECT_HEIGHT;
+        speed_y = -speed_y;
+    }
+
+    if (rect_y <= 0)
+    {
+        rect_y = 0;
+        speed_y = -speed_y;
+    }
+}
+
+
+static void draw_rect(
+    unsigned char *frame,
+    int x,
+    int y,
+    int width,
+    int height
+)
+{
+    for (int py = y; py < y + height; ++py)
+    {
+        for (int px = x; px < x + width; ++px)
+        {
+            if (px < 0 || px >= WIDTH ||
+                py < 0 || py >= HEIGHT)
+            {
+                continue;
+            }
+
+            // RGB888: 3 байта на пиксель.
+            int offset =
+                (py * WIDTH + px) * BPP;
+
+            frame[offset + 0] = 255; // Red
+            frame[offset + 1] = 0;   // Green
+            frame[offset + 2] = 0;   // Blue
+        }
+    }
+}
+
+
+// ============================================================
+// Отправка одного UDP-видеопакета
+// ============================================================
+
+static void send_video_packet(
+    SOCKET video_socket,
+    const unsigned char *payload,
+    uint16_t payload_size,
+    uint32_t current_stream_id,
+    uint32_t current_frame_id,
+    uint32_t current_packet_seq,
+    uint64_t timestamp_us,
+    uint16_t line_number,
+    uint16_t line_offset,
+    uint16_t flags
+)
+{
+    unsigned char packet[
+        VIDEO_HEADER_SIZE + CHUNK_SIZE
+    ];
+
+    /*
+        Заголовок — 32 байта.
+
+        Offset  Size  Field
+        0       2     magic
+        2       1     version
+        3       1     type
+        4       4     stream_id
+        8       4     frame_id
+        12      4     packet_seq
+        16      8     timestamp_us
+        24      2     line_number
+        26      2     line_offset
+        28      2     payload_size
+        30      2     flags
+    */
+
+    write_u16(packet, 0, MAGIC);
+
+    packet[2] = VERSION;
+    packet[3] = VIDEO_TYPE;
+
+    write_u32(packet, 4, current_stream_id);
+    write_u32(packet, 8, current_frame_id);
+    write_u32(packet, 12, current_packet_seq);
+
+    write_u64(packet, 16, timestamp_us);
+
+    write_u16(packet, 24, line_number);
+    write_u16(packet, 26, line_offset);
+    write_u16(packet, 28, payload_size);
+    write_u16(packet, 30, flags);
+
+    memcpy(
+        packet + VIDEO_HEADER_SIZE,
+        payload,
+        payload_size
+    );
+
+    int packet_size =
+        VIDEO_HEADER_SIZE + payload_size;
+
+    int result = sendto(
+        video_socket,
+        reinterpret_cast<const char *>(packet),
+        packet_size,
+        0,
+        reinterpret_cast<const sockaddr *>(&video_client),
+        sizeof(video_client)
+    );
+
+    if (result == SOCKET_ERROR)
+    {
+        printf(
+            "Video send error: %d\n",
+            WSAGetLastError()
+        );
+    }
+}
+
+
+// ============================================================
+// Отправка целого кадра построчно
+// ============================================================
+
+static void send_video_frame(
+    SOCKET video_socket,
+    const unsigned char *frame,
+    uint64_t timestamp_us
+)
+{
+    const uint32_t current_stream_id = stream_id;
+    const uint32_t current_frame_id = frame_id;
+
+    for (uint16_t line = 0; line < HEIGHT; ++line)
+    {
+        const unsigned char *line_data =
+            frame + static_cast<size_t>(line) * LINE_SIZE;
+
+        /*
+            RGB888:
+            LINE_SIZE = 640 * 3 = 1920 байт.
+
+            При CHUNK_SIZE = 1200 строка делится так:
+                packet 1: offset 0,    size 1200
+                packet 2: offset 1200, size 720
+        */
+
+        for (
+            uint16_t line_offset = 0;
+            line_offset < LINE_SIZE;
+            line_offset += CHUNK_SIZE
+        )
+        {
+            int remaining =
+                LINE_SIZE - line_offset;
+
+            uint16_t payload_size =
+                static_cast<uint16_t>(
+                    std::min<int>(
+                        remaining,
+                        CHUNK_SIZE
+                    )
+                );
+
+            uint16_t flags = 0;
+
+            if (line == 0 && line_offset == 0)
+            {
+                flags |= FLAG_FRAME_START;
+            }
+
+            if (line == HEIGHT - 1 &&
+                line_offset + payload_size >= LINE_SIZE)
+            {
+                flags |= FLAG_FRAME_END;
+            }
+
+            const uint32_t current_packet_seq =
+                packet_seq++;
+
+            send_video_packet(
+                video_socket,
+                line_data + line_offset,
+                payload_size,
+                current_stream_id,
+                current_frame_id,
+                current_packet_seq,
+                timestamp_us,
+                line,
+                line_offset,
+                flags
+            );
+        }
+    }
+}
+
+
+// ============================================================
+// main
+// ============================================================
+
+int main()
+{
+    // --------------------------------------------------------
+    // 1. Инициализация WinSock
+    // --------------------------------------------------------
+
+    WSADATA wsa_data{};
+
+    int startup_result = WSAStartup(
+        MAKEWORD(2, 2),
+        &wsa_data
+    );
+
+    if (startup_result != 0)
+    {
+        printf(
+            "WSAStartup failed: %d\n",
+            startup_result
+        );
+
+        return 1;
+    }
+
+
+    // --------------------------------------------------------
+    // 2. Сокет для команд
+    // --------------------------------------------------------
+
+    SOCKET command_socket = socket(
+        AF_INET,
+        SOCK_DGRAM,
+        IPPROTO_UDP
+    );
+
+    if (command_socket == INVALID_SOCKET)
+    {
+        printf(
+            "Command socket creation failed: %d\n",
+            WSAGetLastError()
+        );
+
+        WSACleanup();
+        return 1;
+    }
+
+    sockaddr_in server_address{};
+
+    server_address.sin_family = AF_INET;
+    server_address.sin_port =
+        htons(SERVER_COMMAND_PORT);
+
+    server_address.sin_addr.s_addr =
+        htonl(INADDR_ANY);
+
+    if (bind(
+            command_socket,
+            reinterpret_cast<sockaddr *>(&server_address),
+            sizeof(server_address)
+        ) == SOCKET_ERROR)
+    {
+        printf(
+            "Command socket bind failed: %d\n",
+            WSAGetLastError()
+        );
+
+        closesocket(command_socket);
+        WSACleanup();
+
+        return 1;
+    }
+
+    // Делаем командный сокет неблокирующим.
+    u_long non_blocking = 1;
+
+    if (ioctlsocket(
+            command_socket,
+            FIONBIO,
+            &non_blocking
+        ) == SOCKET_ERROR)
+    {
+        printf(
+            "ioctlsocket failed: %d\n",
+            WSAGetLastError()
+        );
+
+        closesocket(command_socket);
+        WSACleanup();
+
+        return 1;
+    }
+
+
+    // --------------------------------------------------------
+    // 3. Сокет для отправки видео
+    // --------------------------------------------------------
+
+    SOCKET video_socket = socket(
+        AF_INET,
+        SOCK_DGRAM,
+        IPPROTO_UDP
+    );
+
+    if (video_socket == INVALID_SOCKET)
+    {
+        printf(
+            "Video socket creation failed: %d\n",
+            WSAGetLastError()
+        );
+
+        closesocket(command_socket);
+        WSACleanup();
+
+        return 1;
+    }
+
+    /*
+        Для video_socket bind() не нужен.
+        Windows автоматически назначит локальный порт
+        при первой отправке через sendto().
+    */
+
+
+    // --------------------------------------------------------
+    // 4. Подготовка framebuffer
+    // --------------------------------------------------------
+
+    std::vector<unsigned char> frame(
+        FRAME_SIZE,
+        0
+    );
+
+    const auto frame_period =
+        std::chrono::microseconds(1000000 / FPS);
+
+    auto next_frame_time =
+        std::chrono::steady_clock::now();
+
+    printf(
+        "Server started. Command port: %d\n",
+        SERVER_COMMAND_PORT
+    );
+
+    printf(
+        "Video destination port: %d\n",
+        CLIENT_VIDEO_PORT
+    );
+
+
+    // --------------------------------------------------------
+    // 5. Главный цикл
+    // --------------------------------------------------------
+
+    while (true)
+    {
+        // Проверяем все ожидающие команды.
+        process_commands(command_socket);
+
+        // STOP или ещё не было START.
+        if (!streaming || !client_known)
+        {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(1)
+            );
+
+            continue;
+        }
+
+        auto now =
+            std::chrono::steady_clock::now();
+
+        // Соблюдаем интервал между кадрами.
+        if (now < next_frame_time)
+        {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(1)
+            );
+
+            continue;
+        }
+
+        auto frame_start =
+            std::chrono::steady_clock::now();
+
+
+        // ----------------------------------------------------
+        // Создаём RGB-кадр
+        // ----------------------------------------------------
+
+        memset(
+            frame.data(),
+            0,
+            FRAME_SIZE
+        );
+
+        update_rect();
+
+        draw_rect(
+            frame.data(),
+            rect_x,
+            rect_y,
+            RECT_WIDTH,
+            RECT_HEIGHT
+        );
+
+
+        // Timestamp в микросекундах с запуска сервера.
+        uint64_t timestamp_us =
+            static_cast<uint64_t>(
+                std::chrono::duration_cast<
+                    std::chrono::microseconds
+                >(
+                    frame_start - server_start_time
+                ).count()
+            );
+
+
+        // ----------------------------------------------------
+        // Отправляем кадр
+        // ----------------------------------------------------
+
+        send_video_frame(
+            video_socket,
+            frame.data(),
+            timestamp_us
+        );
+
+
+        ++frame_id;
+
+        if (frame_id % 30 == 0)
+        {
+            printf(
+                "stream=%u frame=%u seq=%u x=%d y=%d\n",
+                static_cast<unsigned>(stream_id),
+                static_cast<unsigned>(frame_id),
+                static_cast<unsigned>(packet_seq),
+                rect_x,
+                rect_y
+            );
+        }
+
+        /*
+            Планируем следующий кадр после завершения
+            текущей передачи. Это не даст серверу
+            бесконтрольно накапливать очередь кадров.
+        */
+
+        next_frame_time =
+            std::chrono::steady_clock::now() +
+            frame_period;
+    }
+
+
+    // Недостижимо в этой версии: сервер работает бесконечно.
+    closesocket(video_socket);
+    closesocket(command_socket);
+
+    WSACleanup();
+
+    return 0;
+}

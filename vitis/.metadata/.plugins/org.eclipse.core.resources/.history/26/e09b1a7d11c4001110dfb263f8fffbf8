@@ -1,0 +1,12 @@
+#define UDP_SEND_BUFSIZE 1200
+#define COMMAND_BUFFER_SIZE 512
+extern struct netif server_netif;
+static struct udp_pcb *video_pcb, *command_pcb;
+
+static char send_buf[UDP_SEND_BUFSIZE];
+
+void start_application(udp_pcb *video_pcb, udp_pcb *command_pcb, char unsigned *frame){
+
+	char command_buffer[COMMAND_BUFFER_SIZE];
+
+}

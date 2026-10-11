@@ -1,0 +1,12 @@
+#-----------------------------------------------------------
+# Vivado v2020.2 (64-bit)
+# SW Build 3064766 on Wed Nov 18 09:12:45 MST 2020
+# IP Build 3064653 on Wed Nov 18 14:17:31 MST 2020
+# Start of session at: Fri Oct  9 21:10:02 2026
+# Process ID: 836
+# Current directory: C:/workspace/ethernet/qtproto3/vivado/vivado.runs/impl_1
+# Command line: vivado.exe -log processing_system_wrapper.vdi -applog -product Vivado -messageDb vivado.pb -mode batch -source processing_system_wrapper.tcl -notrace
+# Log file: C:/workspace/ethernet/qtproto3/vivado/vivado.runs/impl_1/processing_system_wrapper.vdi
+# Journal file: C:/workspace/ethernet/qtproto3/vivado/vivado.runs/impl_1\vivado.jou
+#-----------------------------------------------------------
+source processing_system_wrapper.tcl -notrace
