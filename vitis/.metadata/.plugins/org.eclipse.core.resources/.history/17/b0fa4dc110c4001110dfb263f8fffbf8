@@ -1,7 +1,0 @@
-#define UDP_SEND_BUFSIZE 1200
-
-extern struct netif server_netif;
-static struct udp_pcb *pcb;
-static struct perf_stats client;
-static char send_buf[UDP_SEND_BUFSIZE];
-

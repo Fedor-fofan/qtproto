@@ -28,3 +28,59 @@
 00:14:58 INFO  : Platform repository initialization has completed.
 00:15:00 INFO  : Registering command handlers for Vitis TCF services
 00:15:05 INFO  : Successfully done query RDI_DATADIR 
+23:25:34 INFO  : Launching XSCT server: xsct.bat -n  -interactive C:\workspace\ethernet\qtproto3\vitis\temp_xsdb_launch_script.tcl
+23:25:40 INFO  : XSCT server has started successfully.
+23:25:40 INFO  : plnx-install-location is set to ''
+23:25:40 INFO  : Successfully done setting XSCT server connection channel  
+23:25:40 INFO  : Successfully done setting workspace for the tool. 
+23:25:46 INFO  : Platform repository initialization has completed.
+23:25:48 INFO  : Registering command handlers for Vitis TCF services
+23:25:55 INFO  : Successfully done query RDI_DATADIR 
+21:33:22 INFO  : Launching XSCT server: xsct.bat -n  -interactive C:\workspace\ethernet\qtproto3\vitis\temp_xsdb_launch_script.tcl
+21:33:30 INFO  : XSCT server has started successfully.
+21:33:30 INFO  : Successfully done setting XSCT server connection channel  
+21:33:30 INFO  : plnx-install-location is set to ''
+21:33:30 INFO  : Successfully done setting workspace for the tool. 
+21:33:41 INFO  : Platform repository initialization has completed.
+21:33:42 INFO  : Registering command handlers for Vitis TCF services
+21:33:52 INFO  : Successfully done query RDI_DATADIR 
+21:45:57 INFO  : Checking for BSP changes to sync application flags for project 'square_project'...
+21:45:57 ERROR : Failed to openhw "C:/workspace/ethernet/qtproto3/vitis/zynq/export/zynq/hw/zynq.xsa"
+Reason: ERROR: [Common 17-39] 'hsi::open_hw_design' failed due to earlier errors.
+
+21:45:57 ERROR : Failed to update application flags from BSP for 'square_project'. Reason: null
+java.lang.NullPointerException
+	at com.xilinx.sdx.sw.internal.SDxSwPlatform.<init>(SDxSwPlatform.java:305)
+	at com.xilinx.sdx.sw.internal.SDxSwPlatform.create(SDxSwPlatform.java:214)
+	at com.xilinx.sdx.sdk.core.util.SdkPlatformHelper.getSwPlatform(SdkPlatformHelper.java:61)
+	at com.xilinx.sdx.sdk.core.build.SdkMakefileGenerationListener.getSwPlatform(SdkMakefileGenerationListener.java:160)
+	at com.xilinx.sdx.sdk.core.build.SdkMakefileGenerationListener.syncAppFlags(SdkMakefileGenerationListener.java:78)
+	at com.xilinx.sdx.sdk.core.build.SdkMakefileGenerationListener.preMakefileGeneration(SdkMakefileGenerationListener.java:48)
+	at com.xilinx.sdk.managedbuilder.XilinxGnuMakefileGenerator.notifyPreMakefileGenerationListeners(XilinxGnuMakefileGenerator.java:91)
+	at com.xilinx.sdk.managedbuilder.XilinxGnuMakefileGenerator.regenerateMakefiles(XilinxGnuMakefileGenerator.java:75)
+	at org.eclipse.cdt.managedbuilder.internal.core.CommonBuilder.performMakefileGeneration(CommonBuilder.java:1006)
+	at org.eclipse.cdt.managedbuilder.internal.core.CommonBuilder.performPrebuildGeneration(CommonBuilder.java:873)
+	at org.eclipse.cdt.managedbuilder.internal.core.CommonBuilder.build(CommonBuilder.java:748)
+	at org.eclipse.cdt.managedbuilder.internal.core.CommonBuilder.build(CommonBuilder.java:513)
+	at org.eclipse.cdt.managedbuilder.internal.core.CommonBuilder.build(CommonBuilder.java:459)
+	at org.eclipse.core.internal.events.BuildManager$2.run(BuildManager.java:832)
+	at org.eclipse.core.runtime.SafeRunner.run(SafeRunner.java:45)
+	at org.eclipse.core.internal.events.BuildManager.basicBuild(BuildManager.java:220)
+	at org.eclipse.core.internal.events.BuildManager.basicBuild(BuildManager.java:263)
+	at org.eclipse.core.internal.events.BuildManager$1.run(BuildManager.java:316)
+	at org.eclipse.core.runtime.SafeRunner.run(SafeRunner.java:45)
+	at org.eclipse.core.internal.events.BuildManager.basicBuild(BuildManager.java:319)
+	at org.eclipse.core.internal.events.BuildManager.basicBuildLoop(BuildManager.java:371)
+	at org.eclipse.core.internal.events.BuildManager.build(BuildManager.java:392)
+	at org.eclipse.core.internal.resources.Workspace.buildInternal(Workspace.java:515)
+	at org.eclipse.core.internal.resources.Workspace.build(Workspace.java:412)
+	at org.eclipse.ui.actions.BuildAction$1.runInWorkspace(BuildAction.java:291)
+	at org.eclipse.core.internal.resources.InternalWorkspaceJob.run(InternalWorkspaceJob.java:42)
+	at org.eclipse.core.internal.jobs.Worker.run(Worker.java:63)
+21:52:00 INFO  : Result from executing command 'getProjects': zynq
+21:52:00 INFO  : Result from executing command 'getPlatforms': zynq|C:/workspace/ethernet/qtproto3/vitis/zynq/export/zynq/zynq.xpfm
+21:52:01 INFO  : Checking for BSP changes to sync application flags for project 'square_project'...
+21:52:45 INFO  : Checking for BSP changes to sync application flags for project 'square_project'...
+21:53:36 INFO  : Checking for BSP changes to sync application flags for project 'square_project'...
+22:05:43 INFO  : Checking for BSP changes to sync application flags for project 'square_project'...
+22:08:25 INFO  : Checking for BSP changes to sync application flags for project 'square_project'...

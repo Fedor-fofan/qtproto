@@ -27,7 +27,6 @@
  */
 
 #include <stdio.h>
-#include "xparameters.h"
 #include "netif/xadapter.h"
 #include "platform.h"
 #include "platform_config.h"
@@ -57,6 +56,9 @@ void transfer_data(void);
 void print_app_header(void);
 
 struct netif server_netif;
+
+int  video_server_init(unsigned char *processed_frame);
+void video_server_poll(void);
 
 static void print_ip(char *msg, ip_addr_t *ip)
 {
@@ -134,6 +136,7 @@ int main(void)
 	/* start the application*/
 
 
+
 	xil_printf("\r\n");
 
 	while (1) {
@@ -146,7 +149,7 @@ int main(void)
 			TcpSlowTmrFlag = 0;
 		}
 		xemacif_input(netif);
-		transfer_data();
+		video_server_poll();
 	}
 
 	/* never reached */

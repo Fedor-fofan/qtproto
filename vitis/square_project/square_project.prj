@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="ASCII"?>
 <sdkproject:SdkProject xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:sdkproject="http://www.xilinx.com/sdkproject" name="square_project" location="C:/workspace/ethernet/qtproto3/vitis/square_project" platform="C:/workspace/ethernet/qtproto3/vitis/zynq/export/zynq/zynq.xpfm" platformUID="xilinx:::0.0(custom)" systemProject="square_project_system" sysConfig="zynq" runtime="cpp" cpu="standalone_ps7_cortexa9_0" cpuInstance="ps7_cortexa9_0" os="standalone" mssSignature="fb29d30e81f0fe4bd02b6e7923069742">
-  <configuration name="Debug" id="xilinx.gnu.armv7.exe.debug.300476594" dirty="true">
+  <configuration name="Debug" id="xilinx.gnu.armv7.exe.debug.300476594">
     <configBuildOptions xsi:type="sdkproject:SdkOptions"/>
+    <lastBuildOptions xsi:type="sdkproject:SdkOptions"/>
   </configuration>
   <configuration name="Release" id="xilinx.gnu.armv7.exe.release.277199320" dirty="true">
     <configBuildOptions xsi:type="sdkproject:SdkOptions"/>

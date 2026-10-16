@@ -8,7 +8,7 @@
 #include "lwip/pbuf.h"
 #include "lwip/sys.h"
 #include "lwip/udp.h"
-
+#include "xtime_l.h"
 
 /* =========================================================
    Image and protocol configuration
@@ -215,6 +215,13 @@ static void send_command_response(
 /* =========================================================
    UDP command callback
    ========================================================= */
+
+u32_t sys_now(void)
+{
+    XTime t;
+    XTime_GetTime(&t);
+    return (u32_t)(t / (COUNTS_PER_SECOND / 1000));
+}
 
 static void command_cb(
     void *arg,
@@ -553,6 +560,84 @@ int video_server_init(
    Вызывается из основного цикла Vitis после обработки
    входящих Ethernet-пакетов.
    ========================================================= */
+static void draw_rect(
+    unsigned char *frame,
+    int x,
+    int y,
+    int width,
+    int height
+)
+{
+    for (int py = y; py < y + height; py++)
+    {
+        for (int px = x; px < x + width; px++)
+        {
+            if (
+                px < 0 || px >= WIDTH ||
+                py < 0 || py >= HEIGHT
+            )
+                continue;
+
+            int offset =
+                (py * WIDTH + px) * BPP;
+
+            frame[offset + 0] = 255;
+            frame[offset + 1] = 0;
+            frame[offset + 2] = 0;
+        }
+    }
+}
+
+
+static void update_rect(
+    unsigned char *frame,
+    int *x,
+    int *y,
+    int width,
+    int height,
+    int *speed_x,
+    int *speed_y
+)
+{
+    *x += *speed_x;
+    *y += *speed_y;
+
+    if (*x + width >= WIDTH)
+    {
+        *x = WIDTH - width;
+        *speed_x = -*speed_x;
+    }
+
+    if (*x <= 0)
+    {
+        *x = 0;
+        *speed_x = -*speed_x;
+    }
+
+    if (*y + height >= HEIGHT)
+    {
+        *y = HEIGHT - height;
+        *speed_y = -*speed_y;
+    }
+
+    if (*y <= 0)
+    {
+        *y = 0;
+        *speed_y = -*speed_y;
+    }
+
+    draw_rect(
+        frame,
+        *x,
+        *y,
+        width,
+        height
+    );
+}
+
+
+
+static int x = 0, y = 0, speed_x = 1, speed_y = 1;
 
 void video_server_poll(void)
 {
@@ -567,6 +652,7 @@ void video_server_poll(void)
      * Начинаем новый кадр, только когда наступил срок
      * отправки и предыдущий кадр уже закончен.
      */
+
     if (!ctx->frame_active)
     {
         if (!time_reached(now, ctx->next_frame_time_ms))
@@ -582,6 +668,8 @@ void video_server_poll(void)
             ctx->source_frame,
             FRAME_SIZE
         );
+
+        update_rect(tx_frame, &x, &y, 200, 200, &speed_x, &speed_y);
 
         ctx->tx_frame_id = ctx->frame_id;
         ctx->current_frame_start_ms = now;
@@ -681,3 +769,4 @@ void video_server_poll(void)
             ctx->current_frame_start_ms + FRAME_PERIOD_MS;
     }
 }
+
